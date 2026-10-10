@@ -5,9 +5,9 @@
 int main(int argc, char *argv[])
 {
     QApplication app(argc, argv);
-    QApplication::setApplicationName(QStringLiteral("qthunt"));
-    QApplication::setApplicationDisplayName(QStringLiteral("qthunt - UVa Hunting"));
-    QApplication::setOrganizationName(QStringLiteral("qthunt"));
+    QApplication::setApplicationName(QStringLiteral("hunt"));
+    QApplication::setApplicationDisplayName(QStringLiteral("hunt - UVa Hunting"));
+    QApplication::setOrganizationName(QStringLiteral("hunt"));
 
     MainWindow window;
     window.show();

@@ -12,6 +12,7 @@ class QModelIndex;
 class QPushButton;
 class QTabWidget;
 class QTableView;
+class QTreeWidget;
 class QAction;
 
 class UhuntClient;
@@ -54,7 +55,7 @@ private:
     QWidget *buildLiveTab();
     void buildMenus();
     void showProblemDetails(const Problem &problem, bool solved);
-    void refreshRecommendations();
+    void rebuildCpBookTree();
     void updateProblemCount();
     void updateAccountUi();
     void setStatus(const QString &text);
@@ -64,6 +65,7 @@ private:
 
     ProblemCatalog m_catalog;
     QSet<int> m_solvedPids;
+    QSet<int> m_triedPids;
     QVector<Category> m_categories;
     int m_currentUid = 0;
     QString m_currentUname;
@@ -72,8 +74,7 @@ private:
     QLabel *m_rankValue = nullptr;
     QLabel *m_solvedValue = nullptr;
     QLabel *m_subsValue = nullptr;
-    QTableView *m_recommendView = nullptr;
-    ProblemTableModel *m_recommendModel = nullptr;
+    QTreeWidget *m_cpBookTree = nullptr;
 
     // Problems
     QLineEdit *m_problemSearch = nullptr;

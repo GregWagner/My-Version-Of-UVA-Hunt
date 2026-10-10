@@ -1,5 +1,6 @@
 #include "UhuntClient.h"
 
+#include <QFile>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QNetworkReply>
@@ -38,7 +39,7 @@ UhuntClient::UhuntClient(QObject *parent)
 QNetworkReply *UhuntClient::get(const QString &path, int timeoutMs)
 {
     QNetworkRequest req(QUrl(m_baseUrl + path));
-    req.setHeader(QNetworkRequest::UserAgentHeader, QStringLiteral("qthunt/0.1"));
+    req.setHeader(QNetworkRequest::UserAgentHeader, QStringLiteral("hunt/0.1"));
     req.setRawHeader("Accept", "application/json");
     if (timeoutMs > 0)
         req.setTransferTimeout(timeoutMs);
@@ -134,8 +135,13 @@ QVector<Category> UhuntClient::parseCpBook(const QJsonArray &arr)
                 Category c;
                 c.path = QStringLiteral("%1 / %2 / %3")
                              .arg(chapterTitle, sectionTitle, group.first().toString());
-                for (int i = 1; i < group.size(); ++i)
-                    c.nums.push_back(qAbs(group.at(i).toInt()));
+                for (int i = 1; i < group.size(); ++i) {
+                    const int raw = group.at(i).toInt();
+                    const int num = qAbs(raw);
+                    c.nums.push_back(num);
+                    if (raw < 0)
+                        c.starred.insert(num);  // negative == starred (harder)
+                }
                 out.push_back(c);
             }
         }
@@ -276,6 +282,18 @@ void UhuntClient::fetchCpBook(int edition)
     });
 }
 
+void UhuntClient::loadCpBook(const QString &resourcePath)
+{
+    QFile file(resourcePath);
+    if (!file.open(QIODevice::ReadOnly)) {
+        emit errorOccurred(QStringLiteral("Load CP book exercises"),
+                           QStringLiteral("Could not open the bundled exercise data (%1).")
+                               .arg(resourcePath));
+        return;
+    }
+    emit cpBookFetched(parseCpBook(parseArray(file.readAll())));
+}
+
 void UhuntClient::startLivePolling(qint64 lastId)
 {
     if (m_liveActive)
@@ -290,10 +308,12 @@ void UhuntClient::stopLivePolling()
     if (!m_liveActive)
         return;
     m_liveActive = false;
-    if (m_liveReply) {
-        m_liveReply->abort();
-        m_liveReply->deleteLater();
+    if (QNetworkReply *reply = m_liveReply) {
+        // Clear the member first: abort() emits finished() synchronously, and
+        // the finished handler must not see a dangling/duplicated reply.
         m_liveReply = nullptr;
+        reply->abort();
+        reply->deleteLater();
     }
     emit livePollingStopped();
 }
@@ -302,12 +322,11 @@ void UhuntClient::pollOnce(qint64 pollId)
 {
     if (!m_liveActive)
         return;
-    m_liveReply = get(QStringLiteral("/poll/%1").arg(pollId), kLivePollTimeoutMs);
-    connect(m_liveReply, &QNetworkReply::finished, this, [this]() {
-        QNetworkReply *reply = m_liveReply;
-        if (!reply)
-            return;
-        m_liveReply = nullptr;
+    QNetworkReply *reply = get(QStringLiteral("/poll/%1").arg(pollId), kLivePollTimeoutMs);
+    m_liveReply = reply;
+    connect(reply, &QNetworkReply::finished, this, [this, reply]() {
+        if (m_liveReply == reply)
+            m_liveReply = nullptr;
         reply->deleteLater();
         if (!m_liveActive || reply->error() == QNetworkReply::OperationCanceledError)
             return;

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(qthunt VERSION 0.1.0 LANGUAGES CXX)
+project(hunt VERSION 0.1.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -11,8 +11,9 @@ find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets Network)
 
 qt_standard_project_setup()
 
-qt_add_executable(qthunt
+qt_add_executable(hunt
     src/main.cpp
+    resources.qrc
     src/Types.h
     src/Types.cpp
     src/UhuntClient.h
@@ -33,14 +34,14 @@ qt_add_executable(qthunt
     src/MainWindow.cpp
 )
 
-target_link_libraries(qthunt PRIVATE
+target_link_libraries(hunt PRIVATE
     Qt6::Core
     Qt6::Gui
     Qt6::Widgets
     Qt6::Network
 )
 
-install(TARGETS qthunt
+install(TARGETS hunt
     BUNDLE DESTINATION .
     RUNTIME DESTINATION bin
 )

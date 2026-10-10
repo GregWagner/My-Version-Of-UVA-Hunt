@@ -26,6 +26,10 @@ public:
     void fetchGlobalRank(int pos, int count);
     void fetchCpBook(int edition);
 
+    // Load CP-book exercises bundled with the app (Qt resource). Used for the
+    // 4th edition, which the uhunt API does not serve (only 1-3 are online).
+    void loadCpBook(const QString &resourcePath);
+
     // Live submission feed. Keeps one long-poll request open at a time and
     // re-arms itself until stopLivePolling() is called.
     void startLivePolling(qint64 lastId = 0);

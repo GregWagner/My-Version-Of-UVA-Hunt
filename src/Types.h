@@ -70,10 +70,12 @@ struct LiveEvent {
 };
 
 // A flattened Competitive Programming Book exercise category. `nums` holds
-// problem numbers; negative numbers are "starred" (harder) problems.
+// absolute problem numbers; `starred` is the subset that are "starred"
+// (harder, must-try) problems in the book.
 struct Category {
     QString path;
     QVector<int> nums;
+    QSet<int> starred;
 };
 
 // Shared problem lookup tables. Rebuilt whenever /api/p is refreshed.

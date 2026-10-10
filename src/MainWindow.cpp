@@ -4,9 +4,11 @@
 
 #include <QAction>
 #include <QApplication>
+#include <QColor>
 #include <QComboBox>
 #include <QDateTime>
 #include <QFont>
+#include <QFrame>
 #include <QGroupBox>
 #include <QHBoxLayout>
 #include <QHeaderView>
@@ -14,6 +16,7 @@
 #include <QLineEdit>
 #include <QMenuBar>
 #include <QMessageBox>
+#include <QPainter>
 #include <QPushButton>
 #include <QSettings>
 #include <QStatusBar>
@@ -21,6 +24,8 @@
 #include <QTableView>
 #include <QTimer>
 #include <QToolBar>
+#include <QTreeWidget>
+#include <QTreeWidgetItem>
 #include <QVBoxLayout>
 
 #include "LiveEventTableModel.h"
@@ -46,12 +51,49 @@ QLabel *valueLabel(const QString &text = QStringLiteral("-"))
     return label;
 }
 
+// A frame with a classic raised, beveled 3D border. The bevel is painted
+// explicitly (using palette roles) so it looks the same under every style --
+// some platform styles draw QFrame::StyledPanel/Raised as a flat line.
+class BevelFrame : public QFrame
+{
+public:
+    using QFrame::QFrame;
+
+protected:
+    void paintEvent(QPaintEvent *) override
+    {
+        QPainter p(this);
+        p.fillRect(rect(), palette().color(QPalette::Button));
+
+        const int w = width();
+        const int h = height();
+        if (w < 2 || h < 2)
+            return;
+
+        // Outer bevel: light on top/left, dark on bottom/right.
+        p.setPen(palette().color(QPalette::Light));
+        p.drawLine(0, 0, w - 2, 0);
+        p.drawLine(0, 0, 0, h - 2);
+        p.setPen(palette().color(QPalette::Dark));
+        p.drawLine(0, h - 1, w - 1, h - 1);
+        p.drawLine(w - 1, 0, w - 1, h - 1);
+
+        // Inner bevel: mid-light on top/left, shadow on bottom/right.
+        p.setPen(palette().color(QPalette::Midlight));
+        p.drawLine(1, 1, w - 3, 1);
+        p.drawLine(1, 1, 1, h - 3);
+        p.setPen(palette().color(QPalette::Shadow));
+        p.drawLine(1, h - 2, w - 2, h - 2);
+        p.drawLine(w - 2, 1, w - 2, h - 2);
+    }
+};
+
 }  // namespace
 
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
 {
-    setWindowTitle(QStringLiteral("qthunt - UVa Hunting"));
+    setWindowTitle(QStringLiteral("hunt - UVa Hunting"));
     resize(1150, 720);
 
     m_client = new UhuntClient(this);
@@ -115,7 +157,9 @@ MainWindow::MainWindow(QWidget *parent)
 
     setStatus(QStringLiteral("Loading problem list from uhunt..."));
     m_client->fetchProblems();
-    m_client->fetchCpBook(3);
+    // The 4th edition is not served by the API (only 1-3 are), so it ships
+    // bundled with the app as a Qt resource.
+    m_client->loadCpBook(QStringLiteral(":/resources/cpbook4.json"));
 }
 
 MainWindow::~MainWindow() = default;
@@ -137,14 +181,24 @@ QWidget *MainWindow::buildDashboardTab()
     auto *page = new QWidget;
     auto *layout = new QVBoxLayout(page);
 
-    auto *profileBox = new QGroupBox(QStringLiteral("Profile"));
+    auto *profileBox = new QGroupBox;
     auto *profileLayout = new QVBoxLayout(profileBox);
 
-    // Global ranking is the headline stat: a large, centred number.
-    auto *rankCaption = new QLabel(QStringLiteral("Global Ranking"));
-    rankCaption->setAlignment(Qt::AlignHCenter);
-    profileLayout->addWidget(rankCaption);
+    // Wrap each stat in a raised, beveled frame for a boxed 3D look.
+    const auto makeFieldBox = [](const QString &caption, QLabel *value) {
+        auto *frame = new BevelFrame;
+        frame->setFrameShape(QFrame::NoFrame);
+        auto *box = new QVBoxLayout(frame);
+        box->setContentsMargins(14, 9, 14, 9);
+        auto *cap = new QLabel(caption);
+        cap->setAlignment(Qt::AlignHCenter);
+        value->setAlignment(Qt::AlignHCenter);
+        box->addWidget(cap);
+        box->addWidget(value);
+        return frame;
+    };
 
+    // Global ranking is the headline stat: a large, centred number.
     m_rankValue = new QLabel(QStringLiteral("-"));
     {
         QFont f = m_rankValue->font();
@@ -152,42 +206,57 @@ QWidget *MainWindow::buildDashboardTab()
         f.setBold(true);
         m_rankValue->setFont(f);
     }
-    m_rankValue->setAlignment(Qt::AlignHCenter);
     m_rankValue->setTextInteractionFlags(Qt::TextSelectableByMouse);
-    profileLayout->addWidget(m_rankValue);
+    profileLayout->addWidget(makeFieldBox(QStringLiteral("Global Ranking"), m_rankValue));
 
     m_solvedValue = valueLabel();
     m_subsValue = valueLabel();
+    for (QLabel *value : { m_solvedValue, m_subsValue }) {
+        QFont f = value->font();
+        f.setPointSize(f.pointSize() + 5);
+        value->setFont(f);
+    }
     auto *statRow = new QHBoxLayout;
-    const auto addStat = [&](const QString &caption, QLabel *value) {
-        auto *column = new QVBoxLayout;
-        auto *cap = new QLabel(caption);
-        cap->setAlignment(Qt::AlignHCenter);
-        value->setAlignment(Qt::AlignHCenter);
-        column->addWidget(cap);
-        column->addWidget(value);
-        statRow->addLayout(column);
-    };
-    addStat(QStringLiteral("Solved Problems"), m_solvedValue);
-    addStat(QStringLiteral("Total Submissions"), m_subsValue);
+    statRow->addWidget(makeFieldBox(QStringLiteral("Solved Problems"), m_solvedValue));
+    statRow->addWidget(makeFieldBox(QStringLiteral("Total Submissions"), m_subsValue));
     profileLayout->addLayout(statRow);
 
     layout->addWidget(profileBox);
 
-    auto *recBox = new QGroupBox(QStringLiteral("Problems to solve next (unsolved, most-solved first)"));
+    auto *recBox = new QGroupBox(QStringLiteral("Competitive Programming Exercises"));
     auto *recLayout = new QVBoxLayout(recBox);
-    m_recommendView = new QTableView;
-    m_recommendModel = new ProblemTableModel(this);
-    m_recommendView->setModel(m_recommendModel);
-    configureTable(m_recommendView);
-    m_recommendView->setSortingEnabled(false);
-    m_recommendView->horizontalHeader()->setSectionResizeMode(ProblemTableModel::ColTitle,
-                                                              QHeaderView::Stretch);
-    connect(m_recommendView, &QTableView::doubleClicked, this, [this](const QModelIndex &index) {
-        if (const Problem *p = m_recommendModel->problemAt(index.row()))
-            showProblemDetails(*p, m_solvedPids.contains(p->pid));
-    });
-    recLayout->addWidget(m_recommendView);
+
+    auto *bookNote = new QLabel(
+        QStringLiteral("Competitive Programming 4 (CP4) book exercises. "
+                       "\u2605 marks the starred, must-try (harder) problems."));
+    bookNote->setWordWrap(true);
+    recLayout->addWidget(bookNote);
+
+    m_cpBookTree = new QTreeWidget;
+    m_cpBookTree->setColumnCount(5);
+    m_cpBookTree->setHeaderLabels(
+        { QStringLiteral("Book Chapter / Section / Topic / Problem"),
+          QStringLiteral("Solved"), QStringLiteral("Total"), QStringLiteral("%"),
+          QString() });
+    // Right-align the numeric progress columns (headers default to centred
+    // under some styles).
+    for (int col = 1; col <= 3; ++col)
+        m_cpBookTree->headerItem()->setTextAlignment(col, Qt::AlignRight | Qt::AlignVCenter);
+    m_cpBookTree->setRootIsDecorated(true);
+    m_cpBookTree->setUniformRowHeights(false);
+    m_cpBookTree->setAlternatingRowColors(false);
+    m_cpBookTree->header()->setSectionResizeMode(0, QHeaderView::Stretch);
+    for (int col = 1; col <= 4; ++col)
+        m_cpBookTree->header()->setSectionResizeMode(col, QHeaderView::ResizeToContents);
+    connect(m_cpBookTree, &QTreeWidget::itemDoubleClicked, this,
+            [this](QTreeWidgetItem *item, int) {
+                const int pid = item->data(0, Qt::UserRole).toInt();
+                if (pid <= 0)
+                    return;
+                if (const Problem *p = m_catalog.problem(pid))
+                    showProblemDetails(*p, m_solvedPids.contains(p->pid));
+            });
+    recLayout->addWidget(m_cpBookTree, 1);
     layout->addWidget(recBox, 1);
 
     return page;
@@ -293,6 +362,7 @@ QWidget *MainWindow::buildRanklistTab()
     m_rankMode->addItem(QStringLiteral("Around me (5 above / 5 below)"), 0);
     m_rankMode->addItem(QStringLiteral("Around me (25 above / 25 below)"), 1);
     m_rankMode->addItem(QStringLiteral("Global top 100"), 2);
+    m_rankMode->addItem(QStringLiteral("Global top 500"), 3);
     controls->addWidget(m_rankMode);
     controls->addStretch(1);
     layout->addLayout(controls);
@@ -309,6 +379,8 @@ QWidget *MainWindow::buildRanklistTab()
         const int mode = m_rankMode->currentData().toInt();
         if (mode == 2) {
             m_client->fetchGlobalRank(1, 100);
+        } else if (mode == 3) {
+            m_client->fetchGlobalRank(1, 500);
         } else if (m_currentUid != 0) {
             const int n = mode == 1 ? 25 : 5;
             m_client->fetchRanklist(m_currentUid, n, n);
@@ -368,9 +440,9 @@ void MainWindow::buildMenus()
     auto *helpMenu = menuBar()->addMenu(QStringLiteral("&Help"));
     auto *about = helpMenu->addAction(QStringLiteral("&About"));
     connect(about, &QAction::triggered, this, [this]() {
-        QMessageBox::about(this, QStringLiteral("About qthunt"),
+        QMessageBox::about(this, QStringLiteral("About hunt"),
                            QStringLiteral(
-                               "<b>qthunt</b> - a Qt6 desktop client for the uhunt API.<br><br>"
+                               "<b>hunt</b> - a Qt6 desktop client for the uhunt API.<br><br>"
                                "Data comes from <a href=\"https://uhunt.onlinejudge.org/api\">"
                                "uhunt.onlinejudge.org/api</a>, the statistics service for the "
                                "UVa Online Judge.<br><br>"
@@ -423,7 +495,7 @@ void MainWindow::onProblemsFetched(const QVector<Problem> &problems)
     m_catalog.rebuild();
     m_problemModel->setProblems(problems);
     m_problemModel->setSolvedPids(m_solvedPids);
-    refreshRecommendations();
+    rebuildCpBookTree();
     updateProblemCount();
     setStatus(QStringLiteral("Loaded %1 problems.").arg(problems.size()));
 }
@@ -436,13 +508,14 @@ void MainWindow::onUserSubmissionsFetched(int uid, const QVector<Submission> &su
     m_subModel->setSubmissions(subs);
 
     m_solvedPids.clear();
+    m_triedPids.clear();
     for (const Submission &s : subs) {
+        m_triedPids.insert(s.pid);
         if (s.ver == 90)
             m_solvedPids.insert(s.pid);
     }
     m_problemModel->setSolvedPids(m_solvedPids);
-    m_recommendModel->setSolvedPids(m_solvedPids);
-    refreshRecommendations();
+    rebuildCpBookTree();
 
     m_solvedValue->setText(QStringLiteral("%1").arg(m_solvedPids.size()));
     m_subsValue->setText(QStringLiteral("%1").arg(subs.size()));
@@ -469,6 +542,7 @@ void MainWindow::onCpBookFetched(const QVector<Category> &categories)
     for (const Category &c : categories)
         m_categoryFilter->addItem(c.path);
     m_categoryFilter->blockSignals(false);
+    rebuildCpBookTree();
 }
 
 void MainWindow::onLiveEvents(const QVector<LiveEvent> &events, qint64 lastId)
@@ -540,26 +614,170 @@ void MainWindow::onError(const QString &context, const QString &message)
     setStatus(QStringLiteral("%1: %2").arg(context, message));
 }
 
-void MainWindow::refreshRecommendations()
+namespace {
+
+// Fills a book exercise node's Solved / Total / % columns (indices 1-3), using
+// "-" when it has no catalogue problems.
+void setProgressColumns(QTreeWidgetItem *item, int solved, int total)
 {
-    if (m_catalog.problems.isEmpty())
+    for (int col = 1; col <= 3; ++col)
+        item->setTextAlignment(col, Qt::AlignRight | Qt::AlignVCenter);
+    if (total <= 0) {
+        item->setText(1, QStringLiteral("-"));
+        item->setText(2, QStringLiteral("-"));
+        item->setText(3, QStringLiteral("-"));
         return;
-    QVector<Problem> candidates;
-    candidates.reserve(64);
-    for (const Problem &p : m_catalog.problems) {
-        if (p.status == 0 || m_solvedPids.contains(p.pid))
-            continue;
-        candidates.push_back(p);
     }
-    std::sort(candidates.begin(), candidates.end(), [](const Problem &a, const Problem &b) {
-        if (a.dacu != b.dacu)
-            return a.dacu > b.dacu;  // most solved first == easiest
-        return a.num < b.num;
-    });
-    if (candidates.size() > 30)
-        candidates.resize(30);
-    m_recommendModel->setProblems(candidates);
-    m_recommendModel->setSolvedPids(m_solvedPids);
+    item->setText(1, QString::number(solved));
+    item->setText(2, QString::number(total));
+    item->setText(3, QStringLiteral("%1%").arg(solved * 100 / total));
+}
+
+}  // namespace
+
+void MainWindow::rebuildCpBookTree()
+{
+    if (!m_cpBookTree)
+        return;
+
+    // QTreeWidget::clear() deletes the items but *not* the widgets installed
+    // with setItemWidget(), so delete the per-row "Start" buttons ourselves
+    // first — otherwise they leak and accumulate on every rebuild.
+    auto deleteStartButtons = [this](auto &&self, QTreeWidgetItem *item) -> void {
+        for (int i = 0; i < item->childCount(); ++i)
+            self(self, item->child(i));
+        delete m_cpBookTree->itemWidget(item, 4);
+    };
+    for (int i = 0; i < m_cpBookTree->topLevelItemCount(); ++i)
+        deleteStartButtons(deleteStartButtons, m_cpBookTree->topLevelItem(i));
+
+    m_cpBookTree->clear();
+    if (m_categories.isEmpty() || m_catalog.problems.isEmpty())
+        return;
+
+    struct Agg {
+        int solvedAll = 0, totalAll = 0;
+    };
+
+    // Adds the (currently inert) "Start" button to a row's last column. It is
+    // wired up to a real action later; the problem id is stashed on the button
+    // for that purpose (0 for chapter/section/topic rows).
+    auto addStartButton = [this](QTreeWidgetItem *item, int pid) {
+        auto *button = new QPushButton(QStringLiteral("Start"));
+        button->setCursor(Qt::PointingHandCursor);
+        button->setProperty("pid", pid);
+
+        // Compact font + tight padding so the button is smaller than the
+        // default, and a distinct green fill so it stands out from the rows.
+        QFont f = button->font();
+        if (f.pointSizeF() > 0)
+            f.setPointSizeF(f.pointSizeF() - 2.0);
+        button->setFont(f);
+        button->setStyleSheet(QStringLiteral(
+            "QPushButton {"
+            "  background-color: #2e7d32;"
+            "  color: #ffffff;"
+            "  border: 1px solid #1b5e20;"
+            "  border-radius: 3px;"
+            "  padding: 0px 6px;"
+            "}"
+            "QPushButton:hover { background-color: #388e3c; }"
+            "QPushButton:pressed { background-color: #1b5e20; }"));
+        button->setFixedHeight(button->fontMetrics().height() + 4);
+
+        item->setSizeHint(4, button->sizeHint());
+        m_cpBookTree->setItemWidget(item, 4, button);
+    };
+
+    QHash<QString, QTreeWidgetItem *> chapterItems;
+    QHash<QString, QTreeWidgetItem *> sectionItems;
+    QHash<QTreeWidgetItem *, Agg> aggs;
+    const QColor solvedColor(0, 128, 0);
+    const QColor triedColor(196, 120, 0);
+    int chapterNumber = 0;
+
+    for (const Category &c : m_categories) {
+        const QStringList parts = c.path.split(QStringLiteral(" / "));
+        const QString chapterName = parts.value(0);
+        const QString sectionName = parts.value(1);
+        const QString topicName = parts.value(2);
+
+        QTreeWidgetItem *chapter = chapterItems.value(chapterName);
+        if (!chapter) {
+            chapter = new QTreeWidgetItem(m_cpBookTree);
+            chapter->setText(0, QStringLiteral("%1. %2").arg(++chapterNumber).arg(chapterName));
+            QFont f = chapter->font(0);
+            f.setBold(true);
+            chapter->setFont(0, f);
+            chapterItems.insert(chapterName, chapter);
+            aggs.insert(chapter, Agg{});
+            addStartButton(chapter, 0);
+        }
+        const QString sectionKey = chapterName + QLatin1Char('\n') + sectionName;
+        QTreeWidgetItem *section = sectionItems.value(sectionKey);
+        if (!section) {
+            section = new QTreeWidgetItem(chapter);
+            section->setText(0, sectionName);
+            sectionItems.insert(sectionKey, section);
+            aggs.insert(section, Agg{});
+            addStartButton(section, 0);
+        }
+        QTreeWidgetItem *topic = new QTreeWidgetItem(section);
+        topic->setText(0, topicName);
+        Agg topicAgg;
+        aggs.insert(topic, topicAgg);
+        addStartButton(topic, 0);
+
+        // Determine which node aggregates this category contributes to.
+        auto addTo = [&](QTreeWidgetItem *item, bool solved) {
+            Agg &a = aggs[item];
+            ++a.totalAll;
+            if (solved)
+                ++a.solvedAll;
+        };
+
+        for (int num : c.nums) {
+            const Problem *p = m_catalog.problemByNum(num);
+            if (!p)
+                continue;
+            const bool starred = c.starred.contains(num);
+            const bool solved = m_solvedPids.contains(p->pid);
+            const bool tried = m_triedPids.contains(p->pid);
+
+            auto *leaf = new QTreeWidgetItem(topic);
+            leaf->setText(0, QStringLiteral("%1. %2%3")
+                                 .arg(num)
+                                 .arg(starred ? QStringLiteral("\u2605 ") : QString())
+                                 .arg(p->title));
+            leaf->setTextAlignment(1, Qt::AlignRight | Qt::AlignVCenter);
+            if (solved) {
+                leaf->setText(1, QStringLiteral("\u2714"));
+                leaf->setForeground(1, solvedColor);
+            } else if (tried) {
+                leaf->setText(1, QStringLiteral("tried"));
+                leaf->setForeground(1, triedColor);
+            }
+            leaf->setData(0, Qt::UserRole, p->pid);
+            leaf->setToolTip(0, QStringLiteral("%1. %2").arg(num).arg(p->title));
+            addStartButton(leaf, p->pid);
+
+            addTo(topic, solved);
+            addTo(section, solved);
+            addTo(chapter, solved);
+        }
+
+        const Agg &ta = aggs.value(topic);
+        setProgressColumns(topic, ta.solvedAll, ta.totalAll);
+    }
+
+    for (auto it = chapterItems.constBegin(); it != chapterItems.constEnd(); ++it) {
+        const Agg &a = aggs.value(it.value());
+        setProgressColumns(it.value(), a.solvedAll, a.totalAll);
+    }
+    for (auto it = sectionItems.constBegin(); it != sectionItems.constEnd(); ++it) {
+        const Agg &a = aggs.value(it.value());
+        setProgressColumns(it.value(), a.solvedAll, a.totalAll);
+    }
 }
 
 void MainWindow::updateProblemCount()
@@ -595,12 +813,13 @@ void MainWindow::onSignOut()
     m_currentUid = 0;
     m_currentUname.clear();
     m_solvedPids.clear();
+    m_triedPids.clear();
     m_userEdit->setText(QString::fromLatin1(kDefaultUsername));
 
     m_subModel->clear();
     m_rankModel->setRanks({});
     m_problemModel->setSolvedPids(m_solvedPids);
-    m_recommendModel->setProblems({});
+    rebuildCpBookTree();
     updateProblemCount();
 
     for (QLabel *label : { m_rankValue, m_solvedValue, m_subsValue }) {
