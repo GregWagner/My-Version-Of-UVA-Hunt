@@ -6,14 +6,15 @@
 #include "Types.h"
 
 class QComboBox;
+class QCheckBox;
 class QLabel;
 class QLineEdit;
 class QModelIndex;
+class QProgressBar;
 class QPushButton;
 class QTabWidget;
 class QTableView;
 class QTreeWidget;
-class QAction;
 
 class UhuntClient;
 class ProblemTableModel;
@@ -32,6 +33,7 @@ public:
 
 private slots:
     void onHunt();
+    void onRefreshAll();
     void onRefreshProblems();
     void onUserIdResolved(const QString &uname, int uid);
     void onProblemsFetched(const QVector<Problem> &problems);
@@ -50,14 +52,18 @@ private slots:
 private:
     QWidget *buildDashboardTab();
     QWidget *buildProblemsTab();
+    QWidget *buildLevelsTab();
     QWidget *buildSubmissionsTab();
     QWidget *buildRanklistTab();
     QWidget *buildLiveTab();
     void buildMenus();
     void showProblemDetails(const Problem &problem, bool solved);
+    void reloadSubmissions();
+    void reloadRanklist();
     void rebuildCpBookTree();
+    void rebuildLevelsTree();
     void updateProblemCount();
-    void updateAccountUi();
+    void updateSolvedProgress();
     void setStatus(const QString &text);
     void configureTable(QTableView *view);
 
@@ -73,8 +79,13 @@ private:
     // Dashboard
     QLabel *m_rankValue = nullptr;
     QLabel *m_solvedValue = nullptr;
+    QLabel *m_solvedPercent = nullptr;
+    QProgressBar *m_solvedBar = nullptr;
     QLabel *m_subsValue = nullptr;
     QTreeWidget *m_cpBookTree = nullptr;
+    QCheckBox *m_cpFilterSolved = nullptr;
+    QCheckBox *m_cpFilterUnsolved = nullptr;
+    QComboBox *m_cpFilterLevel = nullptr;
 
     // Problems
     QLineEdit *m_problemSearch = nullptr;
@@ -84,6 +95,11 @@ private:
     QTableView *m_problemView = nullptr;
     ProblemTableModel *m_problemModel = nullptr;
     ProblemFilterProxyModel *m_problemProxy = nullptr;
+
+    // Levels
+    QTreeWidget *m_levelsTree = nullptr;
+    QCheckBox *m_levelsFilterSolved = nullptr;
+    QCheckBox *m_levelsFilterUnsolved = nullptr;
 
     // Submissions
     QComboBox *m_subsCount = nullptr;
@@ -103,8 +119,5 @@ private:
 
     // Toolbar
     QLineEdit *m_userEdit = nullptr;
-    QPushButton *m_huntButton = nullptr;
-    QLabel *m_accountLabel = nullptr;
-    QAction *m_signOutAction = nullptr;
     QTabWidget *m_tabs = nullptr;
 };

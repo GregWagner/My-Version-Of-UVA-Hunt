@@ -38,13 +38,38 @@ cmake --build build -j"$(nproc)"
 - `src/ProblemFilterProxyModel.*` – search / solved-status / CP-book category
   filtering of the problem list.
 - `src/MainWindow.*` – builds the tabs and wires signals to slots. All UI state
-  (current uid, solved/tried pid sets, catalog) lives here. The Dashboard tab
+  (current uid, solved/tried pid sets, catalog) lives here. The toolbar's
+  **Refresh** button (and File → Refresh, `F5`) calls `onRefreshAll()`, which
+  reloads the problem catalogue and -- when signed in -- the account's
+  submissions and ranklist, honouring the current tab selections; the
+  `reloadSubmissions()` / `reloadRanklist()` helpers are shared with the tab
+  combo boxes. The Dashboard tab's
+  profile section shows the solved count with the percentage of the loaded
+  problem catalogue solved (`updateSolvedProgress()`) and a `QProgressBar`. It
   also shows the **Competitive Programming 4 (CP4) Exercises** `QTreeWidget`
   (`rebuildCpBookTree()`), mirroring uhunt's CP-book page: chapters → sections →
-  topics → problems with separate **Solved / Total / %** columns and a per-row
-  **Start** button (currently inert; the problem id is stashed on the button's
-  `pid` property). Problem rows put their ✔/tried status in the Solved column.
-  ★ still marks starred problems in the title. No book images.
+  topics → problems with separate **Level / Solved / Total / %** columns and a
+  **Start** button on each unfinished (unsolved) problem (currently inert; the
+  problem id is stashed on the button's `pid` property). The **Level** column
+  shows uhunt's per-problem difficulty, derived from `dacu` (distinct accepted
+  users): `10 - floor(min(10, ln(dacu)))`, i.e. "Lev N" as on uhunt
+  (10 = hardest, 0 = easiest). Two mutually-exclusive checkboxes
+  ("Only solved" / "Only unsolved") and a **Level** combo box ("All levels" /
+  level 0–10) filter the tree to matching problems, hiding branches with
+  nothing left to show. Problem rows put their ✔/tried
+  status in the Solved column. ★ still marks starred problems in the title. No
+  book images.
+- The **Levels** tab (`buildLevelsTab()` / `rebuildLevelsTree()`) lists every
+  loaded catalogue problem grouped under "Level 0"…"Level 10" headings (only the
+  non-empty levels, problems sorted by number). It has **Problem / Chapter /
+  Section / Solved** columns; Chapter/Section come from a first-occurrence
+  problem-number → chapter/section map built from `m_categories` (blank for
+  problems outside the CP book, and only the first listing for the handful of
+  problems in more than one chapter/section). No chapter/section grouping
+  headings are shown. Two mutually-exclusive checkboxes ("Only solved" / "Only
+  unsolved", `m_levelsFilterSolved` / `m_levelsFilterUnsolved`) filter the tree,
+  dropping non-matching problems and any level heading left empty. The level is
+  the same `dacu`-derived value as the CP tree.
 - CP-book data: `resources/cpbook4.json`, embedded via `resources.qrc`. The
   uhunt API does not serve edition 4 (only 1–3), so the CP4 tree is extracted
   from uhunt's own client-side `cpbook_4ed` data and loaded with

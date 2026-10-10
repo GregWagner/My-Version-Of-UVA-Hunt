@@ -1,9 +1,11 @@
 #include "MainWindow.h"
 
 #include <algorithm>
+#include <cmath>
 
 #include <QAction>
 #include <QApplication>
+#include <QCheckBox>
 #include <QColor>
 #include <QComboBox>
 #include <QDateTime>
@@ -12,14 +14,17 @@
 #include <QGroupBox>
 #include <QHBoxLayout>
 #include <QHeaderView>
+#include <QKeySequence>
 #include <QLabel>
 #include <QLineEdit>
 #include <QMenuBar>
 #include <QMessageBox>
 #include <QPainter>
+#include <QProgressBar>
 #include <QPushButton>
 #include <QSettings>
 #include <QStatusBar>
+#include <QStyle>
 #include <QTabWidget>
 #include <QTableView>
 #include <QTimer>
@@ -107,16 +112,14 @@ MainWindow::MainWindow(QWidget *parent)
     m_userEdit->setClearButtonEnabled(true);
     m_userEdit->setMinimumWidth(220);
     toolbar->addWidget(m_userEdit);
-    m_huntButton = new QPushButton(QStringLiteral("Sign in"));
-    m_huntButton->setToolTip(QStringLiteral("Load this UVa user's profile and remember the account"));
-    toolbar->addWidget(m_huntButton);
     toolbar->addSeparator();
 
-    m_accountLabel = new QLabel;
-    toolbar->addWidget(m_accountLabel);
-    m_signOutAction = toolbar->addAction(QStringLiteral("Sign out"));
-    connect(m_signOutAction, &QAction::triggered, this, &MainWindow::onSignOut);
-    toolbar->addSeparator();
+    // Refresh everything: reload the problem catalogue, the CP4 book and the
+    // current account's submissions + ranklist from uhunt.
+    auto *refreshAllAction = toolbar->addAction(style()->standardIcon(QStyle::SP_BrowserReload),
+                                                QStringLiteral("Refresh"));
+    refreshAllAction->setToolTip(QStringLiteral("Reload everything from uhunt (F5)"));
+    connect(refreshAllAction, &QAction::triggered, this, &MainWindow::onRefreshAll);
 
     auto *refreshAction = toolbar->addAction(QStringLiteral("Reload problems"));
     connect(refreshAction, &QAction::triggered, this, &MainWindow::onRefreshProblems);
@@ -124,6 +127,7 @@ MainWindow::MainWindow(QWidget *parent)
     m_tabs = new QTabWidget;
     m_tabs->addTab(buildDashboardTab(), QStringLiteral("Dashboard"));
     m_tabs->addTab(buildProblemsTab(), QStringLiteral("Problems"));
+    m_tabs->addTab(buildLevelsTab(), QStringLiteral("Levels"));
     m_tabs->addTab(buildSubmissionsTab(), QStringLiteral("My Submissions"));
     m_tabs->addTab(buildRanklistTab(), QStringLiteral("Ranklist"));
     m_tabs->addTab(buildLiveTab(), QStringLiteral("Live"));
@@ -131,7 +135,6 @@ MainWindow::MainWindow(QWidget *parent)
 
     buildMenus();
 
-    connect(m_huntButton, &QPushButton::clicked, this, &MainWindow::onHunt);
     connect(m_userEdit, &QLineEdit::returnPressed, this, &MainWindow::onHunt);
 
     connect(m_client, &UhuntClient::userIdResolved, this, &MainWindow::onUserIdResolved);
@@ -141,8 +144,6 @@ MainWindow::MainWindow(QWidget *parent)
     connect(m_client, &UhuntClient::cpBookFetched, this, &MainWindow::onCpBookFetched);
     connect(m_client, &UhuntClient::liveEventsReceived, this, &MainWindow::onLiveEvents);
     connect(m_client, &UhuntClient::errorOccurred, this, &MainWindow::onError);
-
-    updateAccountUi();
 
     // Default account: the saved username if present, otherwise the built-in
     // default. Only the username is ever stored (never a password).
@@ -216,9 +217,39 @@ QWidget *MainWindow::buildDashboardTab()
         f.setPointSize(f.pointSize() + 5);
         value->setFont(f);
     }
+
+    // "Solved Problems" box: the count, the percentage of the loaded catalogue,
+    // and a bar visualising that percentage.
+    auto *solvedFrame = new BevelFrame;
+    solvedFrame->setFrameShape(QFrame::NoFrame);
+    auto *solvedBox = new QVBoxLayout(solvedFrame);
+    solvedBox->setContentsMargins(14, 9, 14, 9);
+    auto *solvedCap = new QLabel(QStringLiteral("Solved Problems"));
+    solvedCap->setAlignment(Qt::AlignHCenter);
+    m_solvedValue->setAlignment(Qt::AlignHCenter);
+    solvedBox->addWidget(solvedCap);
+    solvedBox->addWidget(m_solvedValue);
+    m_solvedPercent = new QLabel(QStringLiteral("-"));
+    m_solvedPercent->setAlignment(Qt::AlignHCenter);
+    solvedBox->addWidget(m_solvedPercent);
+    m_solvedBar = new QProgressBar;
+    m_solvedBar->setRange(0, 100);
+    m_solvedBar->setValue(0);
+    m_solvedBar->setTextVisible(false);
+    m_solvedBar->setFixedHeight(14);
+    m_solvedBar->setStyleSheet(QStringLiteral(
+        "QProgressBar { border: 1px solid #bdbdbd; border-radius: 3px; background: #eeeeee; }"
+        "QProgressBar::chunk { background-color: #2e7d32; border-radius: 2px; }"));
+    solvedBox->addWidget(m_solvedBar);
+
+    auto *subsFrame = makeFieldBox(QStringLiteral("Total Submissions"), m_subsValue);
+    // Top-align the shorter box's content so the two boxes look balanced.
+    if (auto *subsBox = qobject_cast<QVBoxLayout *>(subsFrame->layout()))
+        subsBox->addStretch(1);
+
     auto *statRow = new QHBoxLayout;
-    statRow->addWidget(makeFieldBox(QStringLiteral("Solved Problems"), m_solvedValue));
-    statRow->addWidget(makeFieldBox(QStringLiteral("Total Submissions"), m_subsValue));
+    statRow->addWidget(solvedFrame, 1);
+    statRow->addWidget(subsFrame, 1);
     profileLayout->addLayout(statRow);
 
     layout->addWidget(profileBox);
@@ -232,21 +263,57 @@ QWidget *MainWindow::buildDashboardTab()
     bookNote->setWordWrap(true);
     recLayout->addWidget(bookNote);
 
+    // Filter the tree by solved status. The two checkboxes are mutually
+    // exclusive (checking one clears the other); with none checked, every
+    // problem row is shown.
+    auto *filterRow = new QHBoxLayout;
+    filterRow->addWidget(new QLabel(QStringLiteral("Show:")));
+    m_cpFilterSolved = new QCheckBox(QStringLiteral("Only solved"));
+    m_cpFilterUnsolved = new QCheckBox(QStringLiteral("Only unsolved"));
+    filterRow->addWidget(m_cpFilterSolved);
+    filterRow->addWidget(m_cpFilterUnsolved);
+    filterRow->addSpacing(12);
+    filterRow->addWidget(new QLabel(QStringLiteral("Level:")));
+    m_cpFilterLevel = new QComboBox;
+    m_cpFilterLevel->addItem(QStringLiteral("All levels"));
+    for (int lvl = 0; lvl <= 10; ++lvl)
+        m_cpFilterLevel->addItem(QStringLiteral("Level %1").arg(lvl));
+    filterRow->addWidget(m_cpFilterLevel);
+    filterRow->addStretch(1);
+    recLayout->addLayout(filterRow);
+    connect(m_cpFilterSolved, &QCheckBox::toggled, this, [this](bool on) {
+        if (on && m_cpFilterUnsolved->isChecked()) {
+            QSignalBlocker blocker(m_cpFilterUnsolved);
+            m_cpFilterUnsolved->setChecked(false);
+        }
+        rebuildCpBookTree();
+    });
+    connect(m_cpFilterUnsolved, &QCheckBox::toggled, this, [this](bool on) {
+        if (on && m_cpFilterSolved->isChecked()) {
+            QSignalBlocker blocker(m_cpFilterSolved);
+            m_cpFilterSolved->setChecked(false);
+        }
+        rebuildCpBookTree();
+    });
+    // Index 0 = "All levels"; index N (>0) selects level N-1.
+    connect(m_cpFilterLevel, &QComboBox::currentIndexChanged, this,
+            [this](int) { rebuildCpBookTree(); });
+
     m_cpBookTree = new QTreeWidget;
-    m_cpBookTree->setColumnCount(5);
+    m_cpBookTree->setColumnCount(6);
     m_cpBookTree->setHeaderLabels(
         { QStringLiteral("Book Chapter / Section / Topic / Problem"),
-          QStringLiteral("Solved"), QStringLiteral("Total"), QStringLiteral("%"),
-          QString() });
-    // Right-align the numeric progress columns (headers default to centred
-    // under some styles).
-    for (int col = 1; col <= 3; ++col)
+          QStringLiteral("Level"), QStringLiteral("Solved"), QStringLiteral("Total"),
+          QStringLiteral("%"), QString() });
+    // Right-align the numeric columns (headers default to centred under some
+    // styles).
+    for (int col = 1; col <= 4; ++col)
         m_cpBookTree->headerItem()->setTextAlignment(col, Qt::AlignRight | Qt::AlignVCenter);
     m_cpBookTree->setRootIsDecorated(true);
     m_cpBookTree->setUniformRowHeights(false);
     m_cpBookTree->setAlternatingRowColors(false);
     m_cpBookTree->header()->setSectionResizeMode(0, QHeaderView::Stretch);
-    for (int col = 1; col <= 4; ++col)
+    for (int col = 1; col <= 5; ++col)
         m_cpBookTree->header()->setSectionResizeMode(col, QHeaderView::ResizeToContents);
     connect(m_cpBookTree, &QTreeWidget::itemDoubleClicked, this,
             [this](QTreeWidgetItem *item, int) {
@@ -312,6 +379,70 @@ QWidget *MainWindow::buildProblemsTab()
     return page;
 }
 
+QWidget *MainWindow::buildLevelsTab()
+{
+    auto *page = new QWidget;
+    auto *layout = new QVBoxLayout(page);
+
+    auto *note = new QLabel(
+        QStringLiteral("All loaded problems grouped by uHunt level "
+                       "(10 = hardest, 0 = easiest), derived from dacu. "
+                       "The Chapter and Section columns show where each problem "
+                       "sits in the CP book; the tree is grouped only by level."));
+    note->setWordWrap(true);
+    layout->addWidget(note);
+
+    // Filter by solved status. The two checkboxes are mutually exclusive
+    // (checking one clears the other); with none checked every problem shows.
+    auto *controls = new QHBoxLayout;
+    controls->addWidget(new QLabel(QStringLiteral("Show:")));
+    m_levelsFilterSolved = new QCheckBox(QStringLiteral("Only solved"));
+    m_levelsFilterUnsolved = new QCheckBox(QStringLiteral("Only unsolved"));
+    controls->addWidget(m_levelsFilterSolved);
+    controls->addWidget(m_levelsFilterUnsolved);
+    controls->addStretch(1);
+    layout->addLayout(controls);
+    connect(m_levelsFilterSolved, &QCheckBox::toggled, this, [this](bool on) {
+        if (on && m_levelsFilterUnsolved->isChecked()) {
+            QSignalBlocker blocker(m_levelsFilterUnsolved);
+            m_levelsFilterUnsolved->setChecked(false);
+        }
+        rebuildLevelsTree();
+    });
+    connect(m_levelsFilterUnsolved, &QCheckBox::toggled, this, [this](bool on) {
+        if (on && m_levelsFilterSolved->isChecked()) {
+            QSignalBlocker blocker(m_levelsFilterSolved);
+            m_levelsFilterSolved->setChecked(false);
+        }
+        rebuildLevelsTree();
+    });
+
+    m_levelsTree = new QTreeWidget;
+    m_levelsTree->setColumnCount(4);
+    m_levelsTree->setHeaderLabels({ QStringLiteral("Problem"),
+                                    QStringLiteral("Chapter"),
+                                    QStringLiteral("Section"),
+                                    QStringLiteral("Solved") });
+    m_levelsTree->headerItem()->setTextAlignment(3, Qt::AlignRight | Qt::AlignVCenter);
+    m_levelsTree->setRootIsDecorated(true);
+    m_levelsTree->setUniformRowHeights(true);
+    m_levelsTree->setAlternatingRowColors(true);
+    m_levelsTree->header()->setSectionResizeMode(0, QHeaderView::Stretch);
+    for (int column = 1; column < 4; ++column)
+        m_levelsTree->header()->setSectionResizeMode(column, QHeaderView::ResizeToContents);
+    connect(m_levelsTree, &QTreeWidget::itemDoubleClicked, this,
+            [this](QTreeWidgetItem *item, int) {
+                const int pid = item->data(0, Qt::UserRole).toInt();
+                if (pid <= 0)
+                    return;
+                if (const Problem *p = m_catalog.problem(pid))
+                    showProblemDetails(*p, m_solvedPids.contains(p->pid));
+            });
+    layout->addWidget(m_levelsTree, 1);
+
+    return page;
+}
+
 QWidget *MainWindow::buildSubmissionsTab()
 {
     auto *page = new QWidget;
@@ -338,15 +469,8 @@ QWidget *MainWindow::buildSubmissionsTab()
                                                         QHeaderView::Stretch);
     layout->addWidget(m_subView, 1);
 
-    connect(m_subsCount, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this]() {
-        if (m_currentUid == 0)
-            return;
-        const int count = m_subsCount->currentData().toInt();
-        if (count == 0)
-            m_client->fetchUserSubmissions(m_currentUid);
-        else
-            m_client->fetchUserSubmissionsLast(m_currentUid, count);
-    });
+    connect(m_subsCount, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
+            &MainWindow::reloadSubmissions);
 
     return page;
 }
@@ -375,17 +499,8 @@ QWidget *MainWindow::buildRanklistTab()
                                                         QHeaderView::Stretch);
     layout->addWidget(m_rankView, 1);
 
-    connect(m_rankMode, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this]() {
-        const int mode = m_rankMode->currentData().toInt();
-        if (mode == 2) {
-            m_client->fetchGlobalRank(1, 100);
-        } else if (mode == 3) {
-            m_client->fetchGlobalRank(1, 500);
-        } else if (m_currentUid != 0) {
-            const int n = mode == 1 ? 25 : 5;
-            m_client->fetchRanklist(m_currentUid, n, n);
-        }
-    });
+    connect(m_rankMode, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
+            &MainWindow::reloadRanklist);
 
     return page;
 }
@@ -430,6 +545,9 @@ void MainWindow::buildMenus()
     connect(signOut, &QAction::triggered, this, &MainWindow::onSignOut);
 
     auto *fileMenu = menuBar()->addMenu(QStringLiteral("&File"));
+    auto *refreshAll = fileMenu->addAction(QStringLiteral("&Refresh"));
+    refreshAll->setShortcut(QKeySequence(QStringLiteral("F5")));
+    connect(refreshAll, &QAction::triggered, this, &MainWindow::onRefreshAll);
     auto *refresh = fileMenu->addAction(QStringLiteral("&Reload problems"));
     connect(refresh, &QAction::triggered, this, &MainWindow::onRefreshProblems);
     fileMenu->addSeparator();
@@ -458,7 +576,6 @@ void MainWindow::onHunt()
         setStatus(QStringLiteral("Enter a UVa username first."));
         return;
     }
-    m_huntButton->setEnabled(false);
     setStatus(QStringLiteral("Looking up '%1'...").arg(uname));
     m_client->fetchUserId(uname);
 }
@@ -469,9 +586,53 @@ void MainWindow::onRefreshProblems()
     m_client->fetchProblems();
 }
 
+void MainWindow::onRefreshAll()
+{
+    setStatus(QStringLiteral("Refreshing everything from uhunt..."));
+    // Problem catalogue -- this also rebuilds the CP and Levels trees with the
+    // freshly loaded data. (The CP book itself is a static local resource, so
+    // it is loaded once at startup and needs no reload.)
+    m_client->fetchProblems();
+
+    if (m_currentUid == 0) {
+        // Not signed in yet: (re)resolve the username if we have one; that will
+        // in turn load the submissions and ranklist.
+        const QString uname = m_userEdit->text().trimmed();
+        if (!uname.isEmpty())
+            m_client->fetchUserId(uname);
+        return;
+    }
+    // Reload the signed-in account's data, honouring the tab selections.
+    reloadSubmissions();
+    reloadRanklist();
+}
+
+void MainWindow::reloadSubmissions()
+{
+    if (m_currentUid == 0)
+        return;
+    const int count = m_subsCount->currentData().toInt();
+    if (count == 0)
+        m_client->fetchUserSubmissions(m_currentUid);
+    else
+        m_client->fetchUserSubmissionsLast(m_currentUid, count);
+}
+
+void MainWindow::reloadRanklist()
+{
+    const int mode = m_rankMode->currentData().toInt();
+    if (mode == 2) {
+        m_client->fetchGlobalRank(1, 100);
+    } else if (mode == 3) {
+        m_client->fetchGlobalRank(1, 500);
+    } else if (m_currentUid != 0) {
+        const int n = mode == 1 ? 25 : 5;
+        m_client->fetchRanklist(m_currentUid, n, n);
+    }
+}
+
 void MainWindow::onUserIdResolved(const QString &uname, int uid)
 {
-    m_huntButton->setEnabled(true);
     if (uid <= 0) {
         setStatus(QStringLiteral("No such UVa user: '%1'").arg(uname));
         QMessageBox::warning(this, QStringLiteral("User not found"),
@@ -481,7 +642,6 @@ void MainWindow::onUserIdResolved(const QString &uname, int uid)
     m_currentUid = uid;
     m_currentUname = uname;
     QSettings().setValue(QStringLiteral("account/username"), uname);
-    updateAccountUi();
     m_rankValue->setText(QStringLiteral("..."));
     setStatus(QStringLiteral("Loading submissions and ranklist for %1 (uid %2)...").arg(uname).arg(uid));
     m_client->fetchUserSubmissions(uid);
@@ -496,7 +656,9 @@ void MainWindow::onProblemsFetched(const QVector<Problem> &problems)
     m_problemModel->setProblems(problems);
     m_problemModel->setSolvedPids(m_solvedPids);
     rebuildCpBookTree();
+    rebuildLevelsTree();
     updateProblemCount();
+    updateSolvedProgress();
     setStatus(QStringLiteral("Loaded %1 problems.").arg(problems.size()));
 }
 
@@ -516,9 +678,10 @@ void MainWindow::onUserSubmissionsFetched(int uid, const QVector<Submission> &su
     }
     m_problemModel->setSolvedPids(m_solvedPids);
     rebuildCpBookTree();
+    rebuildLevelsTree();
 
-    m_solvedValue->setText(QStringLiteral("%1").arg(m_solvedPids.size()));
     m_subsValue->setText(QStringLiteral("%1").arg(subs.size()));
+    updateSolvedProgress();
     setStatus(QStringLiteral("Loaded %1 submissions for %2.").arg(subs.size()).arg(m_currentUname));
 }
 
@@ -616,21 +779,31 @@ void MainWindow::onError(const QString &context, const QString &message)
 
 namespace {
 
-// Fills a book exercise node's Solved / Total / % columns (indices 1-3), using
+// uHunt's difficulty level for a problem, derived from the number of distinct
+// accepted users (dacu): level = 10 - floor(min(10, ln(dacu))). Higher means
+// harder (10 = few/no solvers, 0 = very easy). A dacu of 0 is treated as 1,
+// matching uhunt.js. See the "level" cell in uhunt's CP-book view ("Lev N").
+int problemLevel(int dacu)
+{
+    const int d = dacu > 0 ? dacu : 1;
+    return 10 - std::min(10, static_cast<int>(std::floor(std::log(static_cast<double>(d)))));
+}
+
+// Fills a book exercise node's Solved / Total / % columns (indices 2-4), using
 // "-" when it has no catalogue problems.
 void setProgressColumns(QTreeWidgetItem *item, int solved, int total)
 {
-    for (int col = 1; col <= 3; ++col)
+    for (int col = 2; col <= 4; ++col)
         item->setTextAlignment(col, Qt::AlignRight | Qt::AlignVCenter);
     if (total <= 0) {
-        item->setText(1, QStringLiteral("-"));
         item->setText(2, QStringLiteral("-"));
         item->setText(3, QStringLiteral("-"));
+        item->setText(4, QStringLiteral("-"));
         return;
     }
-    item->setText(1, QString::number(solved));
-    item->setText(2, QString::number(total));
-    item->setText(3, QStringLiteral("%1%").arg(solved * 100 / total));
+    item->setText(2, QString::number(solved));
+    item->setText(3, QString::number(total));
+    item->setText(4, QStringLiteral("%1%").arg(solved * 100 / total));
 }
 
 }  // namespace
@@ -646,7 +819,7 @@ void MainWindow::rebuildCpBookTree()
     auto deleteStartButtons = [this](auto &&self, QTreeWidgetItem *item) -> void {
         for (int i = 0; i < item->childCount(); ++i)
             self(self, item->child(i));
-        delete m_cpBookTree->itemWidget(item, 4);
+        delete m_cpBookTree->itemWidget(item, 5);
     };
     for (int i = 0; i < m_cpBookTree->topLevelItemCount(); ++i)
         deleteStartButtons(deleteStartButtons, m_cpBookTree->topLevelItem(i));
@@ -659,9 +832,9 @@ void MainWindow::rebuildCpBookTree()
         int solvedAll = 0, totalAll = 0;
     };
 
-    // Adds the (currently inert) "Start" button to a row's last column. It is
-    // wired up to a real action later; the problem id is stashed on the button
-    // for that purpose (0 for chapter/section/topic rows).
+    // Adds the (currently inert) "Start" button to a problem row's last column.
+    // It is wired up to a real action later; the problem id is stashed on the
+    // button for that purpose. Only individual problems get a button.
     auto addStartButton = [this](QTreeWidgetItem *item, int pid) {
         auto *button = new QPushButton(QStringLiteral("Start"));
         button->setCursor(Qt::PointingHandCursor);
@@ -685,8 +858,8 @@ void MainWindow::rebuildCpBookTree()
             "QPushButton:pressed { background-color: #1b5e20; }"));
         button->setFixedHeight(button->fontMetrics().height() + 4);
 
-        item->setSizeHint(4, button->sizeHint());
-        m_cpBookTree->setItemWidget(item, 4, button);
+        item->setSizeHint(5, button->sizeHint());
+        m_cpBookTree->setItemWidget(item, 5, button);
     };
 
     QHash<QString, QTreeWidgetItem *> chapterItems;
@@ -695,6 +868,16 @@ void MainWindow::rebuildCpBookTree()
     const QColor solvedColor(0, 128, 0);
     const QColor triedColor(196, 120, 0);
     int chapterNumber = 0;
+
+    // "Only solved" / "Only unsolved" filter. The checkboxes are mutually
+    // exclusive, so at most one is active; with none active every row shows.
+    const bool onlySolved = m_cpFilterSolved && m_cpFilterSolved->isChecked();
+    const bool onlyUnsolved = m_cpFilterUnsolved && m_cpFilterUnsolved->isChecked();
+    const bool filterActive = onlySolved != onlyUnsolved;
+    // Level filter: combo index 0 = all levels, index N (>0) = level N-1.
+    const int levelFilter = m_cpFilterLevel ? m_cpFilterLevel->currentIndex() - 1 : -1;
+    const bool levelActive = levelFilter >= 0;
+    const bool anyFilter = filterActive || levelActive;
 
     for (const Category &c : m_categories) {
         const QStringList parts = c.path.split(QStringLiteral(" / "));
@@ -711,7 +894,6 @@ void MainWindow::rebuildCpBookTree()
             chapter->setFont(0, f);
             chapterItems.insert(chapterName, chapter);
             aggs.insert(chapter, Agg{});
-            addStartButton(chapter, 0);
         }
         const QString sectionKey = chapterName + QLatin1Char('\n') + sectionName;
         QTreeWidgetItem *section = sectionItems.value(sectionKey);
@@ -720,13 +902,11 @@ void MainWindow::rebuildCpBookTree()
             section->setText(0, sectionName);
             sectionItems.insert(sectionKey, section);
             aggs.insert(section, Agg{});
-            addStartButton(section, 0);
         }
         QTreeWidgetItem *topic = new QTreeWidgetItem(section);
         topic->setText(0, topicName);
         Agg topicAgg;
         aggs.insert(topic, topicAgg);
-        addStartButton(topic, 0);
 
         // Determine which node aggregates this category contributes to.
         auto addTo = [&](QTreeWidgetItem *item, bool solved) {
@@ -743,23 +923,32 @@ void MainWindow::rebuildCpBookTree()
             const bool starred = c.starred.contains(num);
             const bool solved = m_solvedPids.contains(p->pid);
             const bool tried = m_triedPids.contains(p->pid);
+            const bool statusOk = !filterActive || (onlySolved ? solved : !solved);
+            const bool levelOk = !levelActive || (problemLevel(p->dacu) == levelFilter);
+            const bool matches = statusOk && levelOk;
 
             auto *leaf = new QTreeWidgetItem(topic);
             leaf->setText(0, QStringLiteral("%1. %2%3")
                                  .arg(num)
                                  .arg(starred ? QStringLiteral("\u2605 ") : QString())
                                  .arg(p->title));
+            // uHunt's difficulty level (shown as "Lev N" there).
+            leaf->setText(1, QString::number(problemLevel(p->dacu)));
             leaf->setTextAlignment(1, Qt::AlignRight | Qt::AlignVCenter);
+            leaf->setTextAlignment(2, Qt::AlignRight | Qt::AlignVCenter);
             if (solved) {
-                leaf->setText(1, QStringLiteral("\u2714"));
-                leaf->setForeground(1, solvedColor);
+                leaf->setText(2, QStringLiteral("\u2714"));
+                leaf->setForeground(2, solvedColor);
             } else if (tried) {
-                leaf->setText(1, QStringLiteral("tried"));
-                leaf->setForeground(1, triedColor);
+                leaf->setText(2, QStringLiteral("tried"));
+                leaf->setForeground(2, triedColor);
             }
             leaf->setData(0, Qt::UserRole, p->pid);
             leaf->setToolTip(0, QStringLiteral("%1. %2").arg(num).arg(p->title));
-            addStartButton(leaf, p->pid);
+            // Start is only offered for problems that are not finished (solved).
+            if (!solved && matches)
+                addStartButton(leaf, p->pid);
+            leaf->setHidden(!matches);
 
             addTo(topic, solved);
             addTo(section, solved);
@@ -778,6 +967,106 @@ void MainWindow::rebuildCpBookTree()
         const Agg &a = aggs.value(it.value());
         setProgressColumns(it.value(), a.solvedAll, a.totalAll);
     }
+
+    // When any filter is active, hide chapters/sections/topics that have no
+    // matching problems left, so the tree only shows relevant branches.
+    if (anyFilter) {
+        auto prune = [&](auto &&self, QTreeWidgetItem *item) -> int {
+            if (item->data(0, Qt::UserRole).toInt() > 0)  // problem row
+                return item->isHidden() ? 0 : 1;
+            int visible = 0;
+            for (int i = 0; i < item->childCount(); ++i)
+                visible += self(self, item->child(i));
+            item->setHidden(visible == 0);
+            return visible;
+        };
+        for (int i = 0; i < m_cpBookTree->topLevelItemCount(); ++i)
+            prune(prune, m_cpBookTree->topLevelItem(i));
+    }
+}
+
+void MainWindow::rebuildLevelsTree()
+{
+    if (!m_levelsTree)
+        return;
+    m_levelsTree->clear();
+    if (m_catalog.problems.isEmpty())
+        return;
+
+    // Bucket every loaded problem by its uHunt level (0-10), then emit one
+    // "Level N" heading per non-empty bucket holding that level's problems in
+    // problem-number order. No chapter/section headings are shown. The
+    // solved/unsolved filter, when active, excludes non-matching problems (and
+    // the level headings left with none).
+    const bool onlySolved = m_levelsFilterSolved && m_levelsFilterSolved->isChecked();
+    const bool onlyUnsolved = m_levelsFilterUnsolved && m_levelsFilterUnsolved->isChecked();
+    const bool filterActive = onlySolved != onlyUnsolved;
+
+    // Where each problem sits in the CP book, for the Chapter / Section columns.
+    // Only the first occurrence (in book order) is kept; a handful of problems
+    // are listed under more than one chapter/section.
+    QHash<int, QString> chapterOf;
+    QHash<int, QString> sectionOf;
+    for (const Category &c : m_categories) {
+        const QStringList parts = c.path.split(QStringLiteral(" / "));
+        const QString chapter = parts.value(0);
+        const QString section = parts.value(1);
+        for (int num : c.nums) {
+            if (chapterOf.contains(num))
+                continue;
+            chapterOf.insert(num, chapter);
+            sectionOf.insert(num, section);
+        }
+    }
+
+    QVector<QVector<const Problem *>> byLevel(11);
+    for (const Problem &p : m_catalog.problems) {
+        const bool solved = m_solvedPids.contains(p.pid);
+        if (filterActive && !(onlySolved ? solved : !solved))
+            continue;
+        byLevel[problemLevel(p.dacu)].append(&p);
+    }
+
+    const QColor solvedColor(0, 128, 0);
+    const QColor triedColor(196, 120, 0);
+    for (int lvl = 0; lvl <= 10; ++lvl) {
+        if (byLevel[lvl].isEmpty())
+            continue;
+
+        QVector<const Problem *> probs = byLevel[lvl];
+        std::sort(probs.begin(), probs.end(),
+                  [](const Problem *a, const Problem *b) { return a->num < b->num; });
+
+        int solvedCount = 0;
+        for (const Problem *p : probs)
+            if (m_solvedPids.contains(p->pid))
+                ++solvedCount;
+
+        auto *root = new QTreeWidgetItem(m_levelsTree);
+        root->setText(0, QStringLiteral("Level %1  (%2 problems, %3 solved)")
+                             .arg(lvl)
+                             .arg(probs.size())
+                             .arg(solvedCount));
+        QFont f = root->font(0);
+        f.setBold(true);
+        root->setFont(0, f);
+
+        for (const Problem *p : probs) {
+            auto *item = new QTreeWidgetItem(root);
+            item->setText(0, QStringLiteral("%1. %2").arg(p->num).arg(p->title));
+            item->setText(1, chapterOf.value(p->num));
+            item->setText(2, sectionOf.value(p->num));
+            item->setData(0, Qt::UserRole, p->pid);
+            item->setToolTip(0, QStringLiteral("%1. %2").arg(p->num).arg(p->title));
+            if (m_solvedPids.contains(p->pid)) {
+                item->setText(3, QStringLiteral("\u2714"));
+                item->setForeground(3, solvedColor);
+            } else if (m_triedPids.contains(p->pid)) {
+                item->setText(3, QStringLiteral("tried"));
+                item->setForeground(3, triedColor);
+            }
+        }
+    }
 }
 
 void MainWindow::updateProblemCount()
@@ -789,20 +1078,29 @@ void MainWindow::updateProblemCount()
                                 .arg(m_problemModel->rowCount()));
 }
 
+void MainWindow::updateSolvedProgress()
+{
+    if (!m_solvedValue || !m_solvedPercent || !m_solvedBar)
+        return;
+
+    const int solved = m_solvedPids.size();
+    const int total = m_catalog.problems.size();
+    m_solvedValue->setText(QStringLiteral("%1").arg(solved));
+
+    if (total <= 0) {
+        m_solvedPercent->setText(QStringLiteral("-"));
+        m_solvedBar->setValue(0);
+        return;
+    }
+
+    const double pct = 100.0 * solved / total;
+    m_solvedPercent->setText(QStringLiteral("%1% of %2").arg(pct, 0, 'f', 1).arg(total));
+    m_solvedBar->setValue(qRound(pct));
+}
+
 void MainWindow::setStatus(const QString &text)
 {
     statusBar()->showMessage(text);
-}
-
-void MainWindow::updateAccountUi()
-{
-    const bool signedIn = m_currentUid > 0;
-    if (signedIn)
-        m_accountLabel->setText(QStringLiteral("  Signed in as %1  ").arg(m_currentUname));
-    else
-        m_accountLabel->setText(QStringLiteral("  Not signed in  "));
-    if (m_signOutAction)
-        m_signOutAction->setEnabled(signedIn);
 }
 
 void MainWindow::onSignOut()
@@ -820,12 +1118,14 @@ void MainWindow::onSignOut()
     m_rankModel->setRanks({});
     m_problemModel->setSolvedPids(m_solvedPids);
     rebuildCpBookTree();
+    rebuildLevelsTree();
     updateProblemCount();
 
-    for (QLabel *label : { m_rankValue, m_solvedValue, m_subsValue }) {
+    for (QLabel *label : { m_rankValue, m_solvedValue, m_solvedPercent, m_subsValue }) {
         label->setText(QStringLiteral("-"));
     }
+    if (m_solvedBar)
+        m_solvedBar->setValue(0);
 
-    updateAccountUi();
     setStatus(QStringLiteral("Signed out."));
 }
