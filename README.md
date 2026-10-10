@@ -1,0 +1,67 @@
+# qthunt
+
+A Qt6 desktop client for [uhunt.onlinejudge.org](https://uhunt.onlinejudge.org),
+the statistics service for the UVa Online Judge.
+
+It re-creates the main uHunt features as a native app, talking directly to the
+public uHunt JSON API (`https://uhunt.onlinejudge.org/api`) over HTTPS.
+
+## Features
+
+- **Account / sign in** – the toolbar defaults to the username **`gmwRetired`**
+  and auto-loads it on launch. You can type any other UVa username and press
+  **Sign in**; `uname2uid` resolves the account, then submissions and the
+  ranklist are loaded. The account is remembered (username only); use
+  **Sign out** to clear it for the current session.
+- **Dashboard** – a profile section with the **global ranking** as the headline
+  stat, plus **solved problems** and **total submissions**; followed by a
+  "problems to solve next" list (unsolved, most-solved problems first, i.e.
+  easiest first).
+- **Problems** – the full ~5000-problem catalog with search (number/title),
+  solved/unsolved filter, and a filter by Competitive Programming book exercise
+  category. Solved problems are highlighted. Double-click for full statistics
+  and a link to the problem on onlinejudge.org.
+- **My Submissions** – full submission history or just the last N, with verdicts,
+  language, runtime, rank and submit time. Verdicts are colour-coded.
+- **Ranklist** – users around you, or the global top 100.
+- **Live** – a live submission feed driven by the `/api/poll` long-polling
+  endpoint.
+
+## Build
+
+Requires Qt 6 (Core, Gui, Widgets, Network) and CMake 3.16+.
+
+```sh
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build -j"$(nproc)"
+./build/qthunt
+```
+
+If CMake picks up the wrong Qt (for example an Anaconda Qt in `PATH`), point it
+at the system install:
+
+```sh
+cmake -S . -B build -DCMAKE_PREFIX_PATH=/usr/lib/cmake/Qt6
+```
+
+On this machine Qt 6.11 is installed system-wide via the `qt6-base` package.
+
+## Notes / limitations
+
+- The app is a read-only client: it only exposes what the public uHunt API
+  provides. There is **no chat** feature and no password handling. "Sign in"
+  here means "remember and auto-load this UVa username"; it does not create a
+  server-side login session.
+- Live events only cover the last 100 submissions; if the feed is not polled
+  for a while some events are missed (server-side behaviour).
+- The CP book exercise categories are limited to editions 1–3, which is all the
+  API exposes (`/api/cpbook/{edition}`; edition 4 returns `invalid`).
+- There is no caching: every launch reloads the problem list from uHunt.
+
+## Account storage
+
+The signed-in username is stored with `QSettings` (on Linux:
+`~/.config/qthunt/qthunt.conf`, key `account/username`). Only the username is
+persisted — never a password or any secret. When no account is saved, the app
+falls back to the built-in default username; sign-out is per-session (the
+default returns on the next launch).

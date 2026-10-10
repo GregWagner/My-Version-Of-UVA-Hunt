@@ -1,0 +1,17 @@
+# Build output
+build/
+build-*/
+*.o
+*.obj
+moc_*.cpp
+moc_*.h
+ui_*.h
+qrc_*.cpp
+
+# Qt Creator / IDE
+CMakeLists.txt.user*
+*.autosave
+
+# Editor / OS
+*.swp
+.DS_Store
