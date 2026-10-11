@@ -485,6 +485,7 @@ QWidget *MainWindow::buildRanklistTab()
     m_rankMode = new QComboBox;
     m_rankMode->addItem(QStringLiteral("Around me (5 above / 5 below)"), 0);
     m_rankMode->addItem(QStringLiteral("Around me (25 above / 25 below)"), 1);
+    m_rankMode->addItem(QStringLiteral("Around me (1000 above)"), 4);
     m_rankMode->addItem(QStringLiteral("Global top 100"), 2);
     m_rankMode->addItem(QStringLiteral("Global top 500"), 3);
     controls->addWidget(m_rankMode);
@@ -625,6 +626,9 @@ void MainWindow::reloadRanklist()
         m_client->fetchGlobalRank(1, 100);
     } else if (mode == 3) {
         m_client->fetchGlobalRank(1, 500);
+    } else if (mode == 4) {
+        if (m_currentUid != 0)
+            m_client->fetchRanklistWindow(m_currentUid, 1000);
     } else if (m_currentUid != 0) {
         const int n = mode == 1 ? 25 : 5;
         m_client->fetchRanklist(m_currentUid, n, n);

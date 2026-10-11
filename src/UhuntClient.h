@@ -23,6 +23,10 @@ public:
     void fetchUserSubmissions(int uid, int minSid = 0);
     void fetchUserSubmissionsLast(int uid, int count);
     void fetchRanklist(int uid, int nabove = 5, int nbelow = 5);
+    // Up to `nabove` ranks above the user, plus the user's own row. The
+    // /ranklist endpoint silently caps nabove at 100, so this looks up the
+    // user's current rank and pulls the window from the global ranklist.
+    void fetchRanklistWindow(int uid, int nabove);
     void fetchGlobalRank(int pos, int count);
     void fetchCpBook(int edition);
 

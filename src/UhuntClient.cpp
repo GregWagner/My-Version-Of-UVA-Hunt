@@ -1,5 +1,7 @@
 #include "UhuntClient.h"
 
+#include <algorithm>
+
 #include <QFile>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -266,6 +268,48 @@ void UhuntClient::fetchGlobalRank(int pos, int count)
             return;
         }
         emit ranklistFetched(parseRanklist(parseArray(reply->readAll())));
+    });
+}
+
+void UhuntClient::fetchRanklistWindow(int uid, int nabove)
+{
+    // The /ranklist endpoint silently caps nabove at 100, so ask for just the
+    // user's own row first to learn their current rank, then pull the ranks
+    // above it from the global ranklist (which allows up to 1000 rows a call).
+    QNetworkReply *probe = get(QStringLiteral("/ranklist/%1/0/0").arg(uid), 30000);
+    connect(probe, &QNetworkReply::finished, this, [this, probe, nabove]() {
+        probe->deleteLater();
+        if (probe->error() != QNetworkReply::NoError) {
+            emit errorOccurred(QStringLiteral("Load ranklist"), probe->errorString());
+            return;
+        }
+        const QVector<UserRank> me = parseRanklist(parseArray(probe->readAll()));
+        if (me.isEmpty()) {
+            emit ranklistFetched({});
+            return;
+        }
+        const UserRank self = me.first();
+
+        // Global ranklist positions are 1-based and the server caps a single
+        // response at 1000 rows, so request only the ranks strictly above the
+        // user and append their own row afterwards.
+        const int pos = std::max(1, self.rank - nabove);
+        const int count = self.rank - pos;
+        if (count <= 0) {
+            emit ranklistFetched(me);
+            return;
+        }
+        QNetworkReply *reply = get(QStringLiteral("/rank/%1/%2").arg(pos).arg(count), 30000);
+        connect(reply, &QNetworkReply::finished, this, [this, reply, self]() {
+            reply->deleteLater();
+            if (reply->error() != QNetworkReply::NoError) {
+                emit errorOccurred(QStringLiteral("Load ranklist"), reply->errorString());
+                return;
+            }
+            QVector<UserRank> rows = parseRanklist(parseArray(reply->readAll()));
+            rows.push_back(self);
+            emit ranklistFetched(rows);
+        });
     });
 }
 

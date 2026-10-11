@@ -39,8 +39,8 @@ public uHunt JSON API (`https://uhunt.onlinejudge.org/api`) over HTTPS.
   Double-click for full statistics.
 - **My Submissions** – full submission history or just the last N, with verdicts,
   language, runtime, rank and submit time. Verdicts are colour-coded.
-- **Ranklist** – users around you (5 or 25 each side), or the global top 100
-  or top 500.
+- **Ranklist** – users around you (5 or 25 each side), the 1000 ranks above
+  you, or the global top 100 or top 500.
 - **Live** – a live submission feed driven by the `/api/poll` long-polling
   endpoint.
 

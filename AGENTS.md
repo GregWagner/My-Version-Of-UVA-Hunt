@@ -101,8 +101,8 @@ JSON (some are JSON arrays of arrays).
 | `/p/id/{pid}`, `/p/num/{num}` | one problem object |
 | `/subs-user/{uid}[/{min-sid}]` | `{name, uname, subs:[[sid,pid,ver,run,sbt,lan,rank]]}` |
 | `/subs-user-last/{uid}/{count}` | same, last N |
-| `/ranklist/{uid}/{nabove}/{nbelow}` | array of `{rank,old,userid,name,username,ac,nos,activity[5]}` – **three** path args |
-| `/rank/{pos}/{count}` | global ranklist |
+| `/ranklist/{uid}/{nabove}/{nbelow}` | array of `{rank,old,userid,name,username,ac,nos,activity[5]}` – **three** path args; **`nabove` is silently capped at 100** |
+| `/rank/{pos}/{count}` | global ranklist, position-based, **`count` capped at 1000** |
 | `/p/rank/{pid}/{rank}/{count}`, `/p/ranklist/{pid}/{uid}/{nabove}/{nbelow}` | per-problem ranklists |
 | `/cpbook/{edition}` | nested CP-book exercise categories; **editions 1–3 only** (4 returns `invalid cpbook version`) |
 | `/poll/{poll-id}` | live events, long-polling (holds up to 60s). Start with `0` |
