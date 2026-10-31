@@ -14,6 +14,7 @@ class QProgressBar;
 class QPushButton;
 class QTabWidget;
 class QTableView;
+class QTableWidget;
 class QTreeWidget;
 
 class UhuntClient;
@@ -56,6 +57,7 @@ private:
     QWidget *buildSubmissionsTab();
     QWidget *buildRanklistTab();
     QWidget *buildLiveTab();
+    QWidget *buildKattisTab();
     void buildMenus();
     void showProblemDetails(const Problem &problem, bool solved);
     void reloadSubmissions();
@@ -116,6 +118,11 @@ private:
     QLabel *m_liveStatus = nullptr;
     QTableView *m_liveView = nullptr;
     LiveEventTableModel *m_liveModel = nullptr;
+
+    // Kattis
+    QTableWidget *m_kattisTable = nullptr;
+    QCheckBox *m_kattisFilterUnsolved = nullptr;
+    QSet<QString> m_kattisCompleted;
 
     // Toolbar
     QLineEdit *m_userEdit = nullptr;

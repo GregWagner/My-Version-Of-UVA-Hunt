@@ -9,11 +9,15 @@
 #include <QColor>
 #include <QComboBox>
 #include <QDateTime>
+#include <QFile>
 #include <QFont>
 #include <QFrame>
 #include <QGroupBox>
 #include <QHBoxLayout>
 #include <QHeaderView>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QKeySequence>
 #include <QLabel>
 #include <QLineEdit>
@@ -27,6 +31,8 @@
 #include <QStyle>
 #include <QTabWidget>
 #include <QTableView>
+#include <QTableWidget>
+#include <QTableWidgetItem>
 #include <QTimer>
 #include <QToolBar>
 #include <QTreeWidget>
@@ -131,6 +137,7 @@ MainWindow::MainWindow(QWidget *parent)
     m_tabs->addTab(buildSubmissionsTab(), QStringLiteral("My Submissions"));
     m_tabs->addTab(buildRanklistTab(), QStringLiteral("Ranklist"));
     m_tabs->addTab(buildLiveTab(), QStringLiteral("Live"));
+    m_tabs->addTab(buildKattisTab(), QStringLiteral("Kattis Problems"));
     setCentralWidget(m_tabs);
 
     buildMenus();
@@ -530,6 +537,141 @@ QWidget *MainWindow::buildLiveTab()
 
     connect(m_liveToggle, &QPushButton::toggled, this, &MainWindow::onLiveToggled);
 
+    return page;
+}
+
+QWidget *MainWindow::buildKattisTab()
+{
+    auto *page = new QWidget;
+    auto *layout = new QVBoxLayout(page);
+
+    // Load persisted settings
+    QSettings settings;
+    m_kattisCompleted.clear();
+    QStringList savedCompleted = settings.value(QStringLiteral("kattis/completed")).toStringList();
+    for (const QString &id : savedCompleted)
+        m_kattisCompleted.insert(id);
+    bool savedFilter = settings.value(QStringLiteral("kattis/filterUnsolved"), false).toBool();
+
+    auto *note = new QLabel(
+        QStringLiteral("Kattis problems from cpbook.net Methods to Solve (OJ=Kattis). "
+                       "Source: https://cpbook.net/methodstosolve?oj=kattis&topic=all&quality=all&difficulty=all"));
+    note->setWordWrap(true);
+    layout->addWidget(note);
+
+    auto *controls = new QHBoxLayout;
+    controls->addWidget(new QLabel(QStringLiteral("Show:")));
+    m_kattisFilterUnsolved = new QCheckBox(QStringLiteral("Only unsolved"));
+    m_kattisFilterUnsolved->setChecked(savedFilter);
+    controls->addWidget(m_kattisFilterUnsolved);
+    controls->addSpacing(12);
+    controls->addWidget(new QLabel(QStringLiteral("Search:")));
+    auto *searchEdit = new QLineEdit;
+    searchEdit->setPlaceholderText(QStringLiteral("Search by name..."));
+    searchEdit->setMinimumWidth(200);
+    controls->addWidget(searchEdit);
+    controls->addStretch(1);
+    layout->addLayout(controls);
+
+    auto *statsLabel = new QLabel;
+    statsLabel->setStyleSheet(QStringLiteral("QLabel { font-weight: bold; }"));
+    layout->addWidget(statsLabel);
+
+    m_kattisTable = new QTableWidget;
+    m_kattisTable->setColumnCount(7);
+    m_kattisTable->setHorizontalHeaderLabels({QStringLiteral(""), QStringLiteral("ID"), QStringLiteral("Name"), QStringLiteral("CP4+5"), QStringLiteral("Hint"), QStringLiteral("DACU"), QStringLiteral("Point")});
+    m_kattisTable->horizontalHeader()->setSectionResizeMode(2, QHeaderView::Stretch);
+    m_kattisTable->horizontalHeader()->setSectionResizeMode(4, QHeaderView::Stretch);
+    m_kattisTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    m_kattisTable->setAlternatingRowColors(true);
+    m_kattisTable->verticalHeader()->setVisible(false);
+    m_kattisTable->setSelectionBehavior(QAbstractItemView::SelectRows);
+    m_kattisTable->setSelectionMode(QAbstractItemView::SingleSelection);
+    m_kattisTable->horizontalHeader()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
+
+    QFile file(QStringLiteral(":/resources/kattis_problems.json"));
+    if (file.open(QIODevice::ReadOnly)) {
+        QJsonDocument doc = QJsonDocument::fromJson(file.readAll());
+        if (doc.isArray()) {
+            const QJsonArray arr = doc.array();
+            m_kattisTable->setRowCount(arr.size());
+            for (int i = 0; i < arr.size(); ++i) {
+                QJsonObject obj = arr.at(i).toObject();
+                QString id = obj.value(QStringLiteral("id")).toString();
+                // Checkbox column
+                auto *checkItem = new QTableWidgetItem();
+                checkItem->setFlags(Qt::ItemIsUserCheckable | Qt::ItemIsEnabled);
+                checkItem->setCheckState(m_kattisCompleted.contains(id) ? Qt::Checked : Qt::Unchecked);
+                m_kattisTable->setItem(i, 0, checkItem);
+
+                m_kattisTable->setItem(i, 1, new QTableWidgetItem(id));
+                m_kattisTable->setItem(i, 2, new QTableWidgetItem(obj.value(QStringLiteral("name")).toString()));
+                m_kattisTable->setItem(i, 3, new QTableWidgetItem(obj.value(QStringLiteral("cp")).toString()));
+                m_kattisTable->setItem(i, 4, new QTableWidgetItem(obj.value(QStringLiteral("hint")).toString()));
+                m_kattisTable->setItem(i, 5, new QTableWidgetItem(obj.value(QStringLiteral("dacu")).toString()));
+                m_kattisTable->setItem(i, 6, new QTableWidgetItem(obj.value(QStringLiteral("point")).toString()));
+            }
+        }
+        file.close();
+    }
+
+    auto applyFilter = [this, searchEdit]() {
+        bool onlyUnsolved = m_kattisFilterUnsolved && m_kattisFilterUnsolved->isChecked();
+        QString q = searchEdit->text().trimmed().toLower();
+        for (int r = 0; r < m_kattisTable->rowCount(); ++r) {
+            auto *checkItem = m_kattisTable->item(r, 0);
+            bool completed = checkItem && checkItem->checkState() == Qt::Checked;
+            auto *nameItem = m_kattisTable->item(r, 2);
+            QString name = nameItem ? nameItem->text().toLower() : QString();
+            bool matchesSearch = q.isEmpty() || name.contains(q);
+            bool show = matchesSearch && (!onlyUnsolved || !completed);
+            m_kattisTable->setRowHidden(r, !show);
+        }
+    };
+
+    auto updateStats = [this, statsLabel]() {
+        int total = m_kattisTable->rowCount();
+        int solved = 0;
+        for (int r = 0; r < total; ++r) {
+            auto *checkItem = m_kattisTable->item(r, 0);
+            if (checkItem && checkItem->checkState() == Qt::Checked)
+                ++solved;
+        }
+        int percent = total > 0 ? qRound(solved * 100.0 / total) : 0;
+        statsLabel->setText(QStringLiteral("%1 problems • %2 solved • %3%").arg(total).arg(solved).arg(percent));
+    };
+
+    auto saveCompleted = [this]() {
+        QSettings settings;
+        settings.setValue(QStringLiteral("kattis/completed"), QStringList(m_kattisCompleted.begin(), m_kattisCompleted.end()));
+    };
+    auto saveFilter = [this]() {
+        QSettings settings;
+        settings.setValue(QStringLiteral("kattis/filterUnsolved"), m_kattisFilterUnsolved->isChecked());
+    };
+
+    connect(m_kattisFilterUnsolved, &QCheckBox::toggled, this, [this, applyFilter, saveFilter]() {
+        saveFilter();
+        applyFilter();
+    });
+    connect(searchEdit, &QLineEdit::textChanged, this, applyFilter);
+    connect(m_kattisTable, &QTableWidget::itemChanged, this, [this, applyFilter, saveCompleted, updateStats](QTableWidgetItem *item) {
+        if (!item || item->column() != 0)
+            return;
+        int row = item->row();
+        QString id = m_kattisTable->item(row, 1)->text();
+        if (item->checkState() == Qt::Checked)
+            m_kattisCompleted.insert(id);
+        else
+            m_kattisCompleted.remove(id);
+        saveCompleted();
+        applyFilter();
+        updateStats();
+    });
+
+    layout->addWidget(m_kattisTable, 1);
+    applyFilter();
+    updateStats();
     return page;
 }
 

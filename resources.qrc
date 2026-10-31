@@ -2,5 +2,6 @@
 <RCC version="1.0">
     <qresource prefix="/">
         <file>resources/cpbook4.json</file>
+        <file>resources/kattis_problems.json</file>
     </qresource>
 </RCC>
